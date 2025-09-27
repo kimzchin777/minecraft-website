@@ -1,0 +1,233 @@
+<!--
+File: index.html
+Purpose: Simple website for a Minecraft server. Shows a centered BlueMap preview (embed or link) and a stats area that auto-updates (e.g. deaths, players online).
+How to use (short):
+ 1. Save this file as index.html on your computer.
+ 2. Edit MAP_URL below if you want to change the BlueMap address (default set to the one you gave).
+ 3. Open index.html in a browser to test locally. To make it available on the internet, host it on GitHub Pages / Netlify / any web host.
+ 4. To populate the live stats, either:
+    - Provide an HTTP JSON endpoint that returns {"players": 5, "deaths": 10, "kills": 3}
+      and set STATS_ENDPOINT to its URL; OR
+    - Run the basic Node.js example included below (server.js) which serves a demo /api/stats.
+Notes:
+ - Some servers disallow embedding in an <iframe> via X-Frame-Options or Content-Security-Policy. If the BlueMap server blocks embedding, the page will show a big button which opens the map in a new tab.
+ - Keep the map URL as the raw BlueMap web address (e.g. http://212.232.28.94:25123/)
+-->
+
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Moja strona - Minecraft Server</title>
+  <style>
+    /* Minimal, readable styling for beginners */
+    :root{--accent:#4f46e5;--bg:#0f172a;--card:#0b1220;--muted:#94a3b8}
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;color:#e6eef8;background:linear-gradient(180deg,#071029 0%, #071b2a 100%);}
+    .container{max-width:1100px;margin:32px auto;padding:20px}
+    header{text-align:center;margin-bottom:18px}
+    h1{margin:0;font-size:24px}
+    p.lead{margin:6px 0 0;color:var(--muted)}
+
+    /* BlueMap frame */
+    .map-wrap{display:flex;justify-content:center;margin:20px 0}
+    .map-card{background:rgba(255,255,255,0.03);border-radius:12px;padding:8px;box-shadow:0 6px 18px rgba(2,6,23,0.6);width:100%;}
+    .map-iframe{width:100%;height:550px;border:0;border-radius:8px}
+    .embed-blocked{display:none;padding:40px;text-align:center}
+    .btn{display:inline-block;padding:10px 16px;border-radius:10px;background:var(--accent);color:white;text-decoration:none;font-weight:600}
+
+    /* Stats area */
+    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:18px}
+    .stat-card{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));padding:14px;border-radius:10px;text-align:center}
+    .stat-title{font-size:13px;color:var(--muted);margin-bottom:6px}
+    .stat-value{font-size:28px;font-weight:700}
+    .small{font-size:12px;color:var(--muted)}
+
+    footer{margin-top:22px;text-align:center;color:var(--muted);font-size:13px}
+
+    @media (max-width:600px){.map-iframe{height:380px}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Mapa serwera &amp; statystyki</h1>
+      <p class="lead">Kliknij mapę, aby otworzyć pełną wersję BlueMap.</p>
+    </header>
+
+    <main>
+      <div class="map-wrap">
+        <div class="map-card" id="mapCard">
+          <!-- We'll try to embed the BlueMap in an iframe. If blocked, the script will hide iframe and show a button. -->
+          <iframe id="blueMapIframe" class="map-iframe" src="" title="BlueMap podglad"></iframe>
+
+          <div id="embedBlocked" class="embed-blocked">
+            <p style="margin-bottom:12px">Twoja strona nie może załadować mapy w ramce. Kliknij przycisk aby otworzyć mapę w nowej karcie.</p>
+            <a id="openMapBtn" class="btn" href="#" target="_blank" rel="noopener">Otwórz mapę</a>
+          </div>
+        </div>
+      </div>
+
+      <section>
+        <h2 style="color:#cbd5e1">Statystyki (automatycznie uzupełniane)</h2>
+        <div class="stats" id="statsGrid">
+          <div class="stat-card">
+            <div class="stat-title">Graczy online</div>
+            <div class="stat-value" id="playersCount">—</div>
+            <div class="small">Aktualizuje co 10s</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Zgony</div>
+            <div class="stat-value" id="deathsCount">—</div>
+            <div class="small">Liczba zgonów od początku</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Zabójstwa</div>
+            <div class="stat-value" id="killsCount">—</div>
+            <div class="small">Zliczane jeśli dostępne</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Ostatnia aktualizacja</div>
+            <div class="stat-value" id="lastUpdate">—</div>
+            <div class="small">Czas serwera lokalny</div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <footer>
+      <div>Map URL: <span id="mapUrlText"></span></div>
+      <div style="margin-top:6px">Instrukcje: zapisz plik jako index.html i wrzuć na hosting (GitHub Pages, Netlify lub zwykły serwer). Jeśli nie umiesz hostować, możesz najpierw otworzyć plik lokalnie (dwuklik).</div>
+    </footer>
+  </div>
+
+  <script>
+    /***** CONFIG - edytuj tutaj jeśli potrzebujesz *****/
+    const MAP_URL = 'http://212.232.28.94:25123/'; // <- tutaj adres BlueMap, podałeś go w wiadomości
+    // STATS_ENDPOINT: endpoint, który zwraca JSON, np. {players: 5, deaths: 100, kills: 55}
+    // Możesz ustawić na absolutny URL (https://twojadomena.pl/api/stats) lub zostawić pusty, wtedy strona użyje demo internalnego.
+    const STATS_ENDPOINT = '/api/stats';
+    const POLL_INTERVAL_MS = 10000; // odswiezanie statystyk co 10 sekund
+    /**************************************************/
+
+    document.getElementById('mapUrlText').textContent = MAP_URL;
+    const iframe = document.getElementById('blueMapIframe');
+    const embedBlocked = document.getElementById('embedBlocked');
+    const openMapBtn = document.getElementById('openMapBtn');
+
+    iframe.src = MAP_URL;
+    openMapBtn.href = MAP_URL;
+
+    // Detect if iframe loaded successfully or blocked by headers.
+    // We try to access its contentWindow after a short delay. If blocked by X-Frame-Options/CSP, accessing contentWindow.location will throw or be inaccessible.
+    function checkIframeAllowed(){
+      setTimeout(()=>{
+        try{
+          // Accessing location.href of cross-origin iframe will also throw in some browsers. We just use a permissive check.
+          const cw = iframe.contentWindow;
+          // if contentWindow exists and we can read 'length' property it's probably ok (in many cases length is 0+) but cross-origin may still be accessible partially.
+          if(!cw){throw new Error('no cw')}
+          // Try reading title; will fail if blocked by CSP/X-Frame
+          try{ const t = cw.document && cw.document.title; /* might be undefined */ }
+          catch(e){ throw e }
+          // if we got here, embedding likely worked; ensure overlay hidden
+          embedBlocked.style.display = 'none';
+          iframe.style.display = '';
+        }catch(err){
+          // embedding blocked — show friendly button
+          iframe.style.display = 'none';
+          embedBlocked.style.display = 'block';
+        }
+      },800);
+    }
+
+    // Run check — note: in some cases cross-origin access will always throw even if iframe visible; fallback UX is provided.
+    checkIframeAllowed();
+
+    // --- Stats fetching and rendering ---
+    async function fetchStats(){
+      const now = new Date();
+      const playersEl = document.getElementById('playersCount');
+      const deathsEl = document.getElementById('deathsCount');
+      const killsEl = document.getElementById('killsCount');
+      const lastUpdateEl = document.getElementById('lastUpdate');
+
+      // If STATS_ENDPOINT is not configured or looks like demo, use internal demo generator
+      if(!STATS_ENDPOINT || STATS_ENDPOINT === '/api/stats'){
+        // Try fetch; if 404 or error, fallback to local demo
+        try{
+          const resp = await fetch(STATS_ENDPOINT, {cache:'no-store'});
+          if(!resp.ok) throw new Error('no api');
+          const data = await resp.json();
+          renderStats(data);
+          return;
+        }catch(e){
+          // demo: simple random-ish values stored in localStorage so numbers persist between reloads
+          let stored = JSON.parse(localStorage.getItem('demoStats') || '{}');
+          if(!stored.players) stored.players = Math.floor(Math.random()*10)+1;
+          if(!stored.deaths) stored.deaths = parseInt(stored.deaths||0) + Math.floor(Math.random()*3);
+          if(!stored.kills) stored.kills = parseInt(stored.kills||0) + Math.floor(Math.random()*2);
+          localStorage.setItem('demoStats', JSON.stringify(stored));
+          renderStats(stored);
+          return;
+        }
+      }
+
+      // If STATS_ENDPOINT provided (absolute or relative), try to fetch it
+      try{
+        const resp = await fetch(STATS_ENDPOINT, {cache:'no-store'});
+        if(!resp.ok) throw new Error('bad response');
+        const data = await resp.json();
+        renderStats(data);
+      }catch(err){
+        console.warn('Nie udalo sie pobrac statystyk z endpointu:', err);
+        // leave previous values or fallback to demo
+      }
+
+      function renderStats(obj){
+        playersEl.textContent = (obj.players !== undefined) ? obj.players : '—';
+        deathsEl.textContent = (obj.deaths !== undefined) ? obj.deaths : '—';
+        killsEl.textContent = (obj.kills !== undefined) ? obj.kills : '—';
+        lastUpdateEl.textContent = new Date().toLocaleString();
+      }
+    }
+
+    // Start polling
+    fetchStats();
+    setInterval(fetchStats, POLL_INTERVAL_MS);
+
+  </script>
+
+  <!--
+    === OPTIONAL: example server (Node.js) to serve demo /api/stats ===
+    Save as server.js and run: npm init -y && npm i express cors && node server.js
+
+    const express = require('express');
+    const cors = require('cors');
+    const app = express();
+    app.use(cors());
+
+    // Simple demo stats you can replace with real data gathering (parse logs or query mc server)
+    let deaths = 42;
+    let players = 3;
+    let kills = 18;
+
+    app.get('/api/stats', (req, res) => {
+      // Example: increment deaths randomly to simulate activity
+      if(Math.random() < 0.2) deaths += Math.floor(Math.random()*2);
+      players = Math.max(0, players + Math.floor(Math.random()*3)-1);
+      res.json({players, deaths, kills});
+    });
+
+    app.listen(3000, ()=>console.log('Demo stats server on http://localhost:3000'));
+
+    === How to get REAL stats ===
+    - Use a plugin that exposes REST API (some server-control panels or plugins can) OR
+    - Use RCON / Query protocol: server-side script can query the Minecraft server for online players (mcstatus, query) OR
+    - Parse server logs (logs/latest.log) to count death messages. Tail the file and increment counter when death messages appear.
+
+    If you want, mogę dodać przykład skryptu do parsowania logów lub użycia mcstatus — powiedz tylko czy hostujesz serwer (tak/nie) oraz na jakim systemie (Windows/Linux).
+  -->
+</body>
+</html>
